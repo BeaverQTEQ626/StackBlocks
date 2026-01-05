@@ -22,10 +22,7 @@
     box-shadow: 0 20px 50px rgba(0,0,0,0.25);
   }
 
-  h1 {
-    text-align: center;
-    margin: 5px 0 10px;
-  }
+  h1 { text-align: center; }
 
   .score {
     text-align: center;
@@ -47,7 +44,10 @@
     height: 26px;
     background: rgba(255,255,255,0.5);
     border-radius: 6px;
-    transition: background 0.25s;
+  }
+
+  .cell.preview {
+    background: rgba(0, 255, 200, 0.6) !important;
   }
 
   .cell.filled {
@@ -55,8 +55,8 @@
   }
 
   @keyframes pop {
-    0% { transform: scale(0.6); }
-    100% { transform: scale(1); }
+    from { transform: scale(0.6); }
+    to { transform: scale(1); }
   }
 
   .pieces {
@@ -71,12 +71,13 @@
     padding: 8px;
     border-radius: 15px;
     cursor: grab;
-    transition: transform 0.2s;
   }
 
-  .piece:active {
+  .piece.dragging {
+    position: fixed;
+    pointer-events: none;
+    z-index: 999;
     transform: scale(1.1);
-    cursor: grabbing;
   }
 
   .block {
@@ -98,11 +99,8 @@
 <div class="game">
   <h1>🧩 Arslie Blocks</h1>
   <div class="score">⭐ Điểm: <span id="score">0</span></div>
-
   <div id="board" class="board"></div>
-
   <div class="pieces" id="pieces"></div>
-
   <div class="gameover" id="gameover"></div>
 </div>
 
@@ -115,6 +113,7 @@ const scoreEl = document.getElementById("score");
 const gameoverEl = document.getElementById("gameover");
 
 let score = 0;
+let activePiece = null;
 
 // tạo bàn cờ
 for (let i = 0; i < SIZE * SIZE; i++) {
@@ -125,7 +124,6 @@ for (let i = 0; i < SIZE * SIZE; i++) {
   boardEl.appendChild(c);
 }
 
-// các khối hình (AI random)
 const SHAPES = [
   [[1,1,1]],
   [[1],[1],[1]],
@@ -138,12 +136,11 @@ const SHAPES = [
 
 const COLORS = ["#ff595e","#ffca3a","#8ac926","#1982c4","#6a4c93"];
 
-// tạo khối mới
 function newPieces() {
   piecesEl.innerHTML = "";
   for (let i = 0; i < 3; i++) {
-    const shape = SHAPES[Math.floor(Math.random() * SHAPES.length)];
-    const color = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const shape = SHAPES[Math.random()*SHAPES.length|0];
+    const color = COLORS[Math.random()*COLORS.length|0];
     piecesEl.appendChild(createPiece(shape, color));
   }
 }
@@ -152,7 +149,6 @@ function createPiece(shape, color) {
   const p = document.createElement("div");
   p.className = "piece";
   p.style.gridTemplateColumns = `repeat(${shape[0].length}, 1fr)`;
-
   p.shape = shape;
   p.color = color;
 
@@ -163,113 +159,119 @@ function createPiece(shape, color) {
     p.appendChild(b);
   });
 
-  p.draggable = true;
-  p.ondragstart = e => {
-    e.dataTransfer.setData("text/plain", "");
-    window.dragPiece = p;
+  p.onpointerdown = e => {
+    activePiece = p;
+    p.classList.add("dragging");
   };
 
   return p;
 }
 
-// kéo thả
-boardEl.ondragover = e => e.preventDefault();
+document.addEventListener("pointermove", e => {
+  if (!activePiece) return;
+  activePiece.style.left = e.clientX - activePiece.offsetWidth/2 + "px";
+  activePiece.style.top  = e.clientY - activePiece.offsetHeight/2 + "px";
 
-boardEl.ondrop = e => {
-  const piece = window.dragPiece;
-  if (!piece) return;
-
-  const idx = e.target.dataset.index;
-  if (idx == null) return;
-
-  if (placePiece(piece, Number(idx))) {
-    piece.remove();
-    clearLines();
-    if (piecesEl.children.length === 0) newPieces();
-    checkGameOver();
+  clearPreview();
+  const target = document.elementFromPoint(e.clientX, e.clientY);
+  if (target?.classList.contains("cell")) {
+    showPreview(activePiece.shape, +target.dataset.index);
   }
-};
+});
+
+document.addEventListener("pointerup", e => {
+  if (!activePiece) return;
+  clearPreview();
+
+  const target = document.elementFromPoint(e.clientX, e.clientY);
+  if (target?.classList.contains("cell")) {
+    if (placePiece(activePiece, +target.dataset.index)) {
+      activePiece.remove();
+      clearLines();
+      if (!piecesEl.children.length) newPieces();
+      checkGameOver();
+    }
+  }
+
+  activePiece.classList.remove("dragging");
+  activePiece.style = "";
+  activePiece = null;
+});
 
 function placePiece(piece, index) {
-  const shape = piece.shape;
-  const x = index % SIZE;
-  const y = Math.floor(index / SIZE);
-
-  for (let r = 0; r < shape.length; r++) {
-    for (let c = 0; c < shape[r].length; c++) {
-      if (!shape[r][c]) continue;
-      const nx = x + c;
-      const ny = y + r;
-      if (nx >= SIZE || ny >= SIZE) return false;
-      if (board[ny * SIZE + nx]) return false;
-    }
-  }
-
-  for (let r = 0; r < shape.length; r++) {
-    for (let c = 0; c < shape[r].length; c++) {
-      if (shape[r][c]) {
-        const i = (y + r) * SIZE + (x + c);
-        board[i] = piece.color;
-        const cell = boardEl.children[i];
-        cell.classList.add("filled");
-        cell.style.background = piece.color;
+  const x = index % SIZE, y = index / SIZE | 0;
+  for (let r=0;r<piece.shape.length;r++)
+    for (let c=0;c<piece.shape[r].length;c++)
+      if (piece.shape[r][c]) {
+        const i=(y+r)*SIZE+(x+c);
+        if (x+c>=SIZE||y+r>=SIZE||board[i]) return false;
       }
-    }
-  }
 
-  score += shape.flat().filter(v=>v).length * 10;
+  for (let r=0;r<piece.shape.length;r++)
+    for (let c=0;c<piece.shape[r].length;c++)
+      if (piece.shape[r][c]) {
+        const i=(y+r)*SIZE+(x+c);
+        board[i]=piece.color;
+        boardEl.children[i].style.background=piece.color;
+        boardEl.children[i].classList.add("filled");
+      }
+
+  score += piece.shape.flat().filter(v=>v).length * 10;
   scoreEl.textContent = score;
   return true;
 }
 
-// xóa dòng
+function showPreview(shape, index) {
+  const x=index%SIZE,y=index/SIZE|0;
+  for(let r=0;r<shape.length;r++)
+    for(let c=0;c<shape[r].length;c++)
+      if(shape[r][c]) {
+        const i=(y+r)*SIZE+(x+c);
+        if(x+c>=SIZE||y+r>=SIZE||board[i]) return;
+      }
+  for(let r=0;r<shape.length;r++)
+    for(let c=0;c<shape[r].length;c++)
+      if(shape[r][c])
+        boardEl.children[(y+r)*SIZE+(x+c)].classList.add("preview");
+}
+
+function clearPreview() {
+  document.querySelectorAll(".preview")
+    .forEach(c=>c.classList.remove("preview"));
+}
+
 function clearLines() {
-  for (let r = 0; r < SIZE; r++) {
-    let full = true;
-    for (let c = 0; c < SIZE; c++) {
-      if (!board[r*SIZE+c]) full = false;
-    }
-    if (full) {
-      for (let c = 0; c < SIZE; c++) {
-        board[r*SIZE+c] = 0;
-        const cell = boardEl.children[r*SIZE+c];
-        cell.style.background = "rgba(255,255,255,0.5)";
-        cell.classList.remove("filled");
+  for (let r=0;r<SIZE;r++) {
+    if ([...Array(SIZE)].every((_,c)=>board[r*SIZE+c])) {
+      for (let c=0;c<SIZE;c++) {
+        board[r*SIZE+c]=0;
+        boardEl.children[r*SIZE+c].style.background="rgba(255,255,255,0.5)";
       }
-      score += 120;
+      score+=120;
     }
   }
-  scoreEl.textContent = score;
+  scoreEl.textContent=score;
 }
 
-// thua chưa?
 function checkGameOver() {
-  for (const p of piecesEl.children) {
-    for (let i = 0; i < SIZE*SIZE; i++) {
-      if (canPlace(p.shape, i)) return;
-    }
-  }
-  gameoverEl.textContent = "💀 Game Over – Classic kết thúc!";
+  for (const p of piecesEl.children)
+    for (let i=0;i<SIZE*SIZE;i++)
+      if (canPlace(p.shape,i)) return;
+  gameoverEl.textContent="💀 Game Over – Classic kết thúc!";
 }
 
-function canPlace(shape, index) {
-  const x = index % SIZE;
-  const y = Math.floor(index / SIZE);
-  for (let r = 0; r < shape.length; r++) {
-    for (let c = 0; c < shape[r].length; c++) {
-      if (!shape[r][c]) continue;
-      const nx = x + c;
-      const ny = y + r;
-      if (nx >= SIZE || ny >= SIZE) return false;
-      if (board[ny*SIZE+nx]) return false;
-    }
-  }
+function canPlace(shape,index){
+  const x=index%SIZE,y=index/SIZE|0;
+  for(let r=0;r<shape.length;r++)
+    for(let c=0;c<shape[r].length;c++)
+      if(shape[r][c]){
+        const i=(y+r)*SIZE+(x+c);
+        if(x+c>=SIZE||y+r>=SIZE||board[i]) return false;
+      }
   return true;
 }
 
-// start game
 newPieces();
 </script>
-
 </body>
 </html>
